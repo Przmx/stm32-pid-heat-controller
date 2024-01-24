@@ -32,17 +32,16 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-typedef float float32_t;
 typedef struct{
-	float32_t Kp;
-	float32_t Ki;
-	float32_t Kd;
-	float32_t dt;
+	float Kp;
+	float Ki;
+	float Kd;
+	float dt;
 }pid_parameters_t;
 
 typedef struct{
 	pid_parameters_t p;
-	float32_t previous_error, previous_integral;
+	float previous_error, previous_integral;
 }pid_t;
 /* USER CODE END PTD */
 
@@ -62,13 +61,49 @@ I2C_HandleTypeDef hi2c1;
 I2C_HandleTypeDef hi2c4;
 
 TIM_HandleTypeDef htim1;
+TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim3;
 
 UART_HandleTypeDef huart3;
 
 /* USER CODE BEGIN PV */
-float temperature, huminidity;
-float temp_zadana=27;
+float temp_zadana;
+float temperature;
+//float temperature;
 int32_t pressure;
+float wyjscie_PID;
+float u1;
+float calculate_discrete_pid(pid_t* pid, float temp_zadana, float temperature){
+	float u=0, P, I, D, uchyb, integral, derivative;
+
+	uchyb = temp_zadana - temperature;
+
+	//proportional part
+	P = pid->p.Kp * uchyb;
+
+	//integral part
+	integral = pid->previous_integral + (uchyb+pid->previous_error) ; //numerical integrator without anti-windup
+	pid->previous_integral = integral;
+	I = pid->p.Ki*integral*(pid->p.dt/2.0);
+
+	//derivative part
+	derivative = (uchyb - pid->previous_error)/pid->p.dt; //numerical derivative without filter
+	pid->previous_error = uchyb;
+	D = pid->p.Kd*derivative;
+
+	//sum of all parts
+	u = P  + I + D; //without saturation
+	u1 = u;
+	if(u>50)
+	{
+		u = 50;
+	}
+	else if(u<-50)
+	{
+		u = -50;
+	}
+	return u;
+}
 
 /* USER CODE END PV */
 
@@ -79,6 +114,8 @@ static void MX_USART3_UART_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_I2C4_Init(void);
 static void MX_TIM1_Init(void);
+static void MX_TIM2_Init(void);
+static void MX_TIM3_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -97,6 +134,9 @@ int main(void)
   /* USER CODE BEGIN 1 */
   #define MAX_LENGTH 30
   char text[MAX_LENGTH];
+  float dt=0.01;
+
+  pid_t pid1 = { .p.Kp=50.0, .p.Ki=0.1, .p.Kd=0, .p.dt=dt, .previous_error=0, .previous_integral=0};
   //uint16_t length;
   /* USER CODE END 1 */
 
@@ -122,6 +162,8 @@ int main(void)
   MX_I2C1_Init();
   MX_I2C4_Init();
   MX_TIM1_Init();
+  MX_TIM2_Init();
+  MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
   BMP280_Init(&hi2c1, BMP280_TEMPERATURE_16BIT, BMP280_STANDARD, BMP280_FORCEDMODE);
   lcd_init ();
@@ -130,8 +172,9 @@ int main(void)
   lcd_put_cur(1, 0);
   lcd_send_string("I2C1-BMP,I2C4-LCD");
   HAL_Delay(2000);
-
   HAL_TIM_Encoder_Start(&htim1, TIM_CHANNEL_ALL);
+  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
   uint8_t impulsy = 0;
   uint8_t msg[12];
 
@@ -158,7 +201,7 @@ int main(void)
 
 //	   tutaj odczyt z enkodera - temp_zadana
 	  impulsy = __HAL_TIM_GET_COUNTER(&htim1);
-	  temp_zadana =20+(float)impulsy/30*20 ;
+	  temp_zadana = 20+(float)impulsy/30*20 ;
 	  sprintf((char*)msg, "\n\rEnkoder= %3i\n\r", impulsy);
 	  HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), 1000);
 	  HAL_Delay(250);
@@ -166,18 +209,17 @@ int main(void)
 	  sprintf((char*)text, "T_zad. %.2f  C", temp_zadana);
 
 	  lcd_send_string(text);
+	  wyjscie_PID = calculate_discrete_pid(&pid1, temp_zadana, temperature);
 
 	  if (temperature<temp_zadana)
 	  {
-	  	  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_7, GPIO_PIN_SET);
-	  	  HAL_GPIO_WritePin(GPIOB, LD1_Pin, GPIO_PIN_SET);
-	  	  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_6, GPIO_PIN_RESET);
+		  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (int)wyjscie_PID);
+		  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);
 	  }
 	  else
 	  {
-		  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_7, GPIO_PIN_RESET);
-		  HAL_GPIO_WritePin(GPIOB, LD1_Pin, GPIO_PIN_RESET);
-		  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_6, GPIO_PIN_SET);
+		  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 0);
+		  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, (int)wyjscie_PID);
 	  }
 	  HAL_Delay(1000);
  }
@@ -381,6 +423,104 @@ static void MX_TIM1_Init(void)
 }
 
 /**
+  * @brief TIM2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM2_Init(void)
+{
+
+  /* USER CODE BEGIN TIM2_Init 0 */
+
+  /* USER CODE END TIM2_Init 0 */
+
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  /* USER CODE BEGIN TIM2_Init 1 */
+
+  /* USER CODE END TIM2_Init 1 */
+  htim2.Instance = TIM2;
+  htim2.Init.Prescaler = 0;
+  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim2.Init.Period = 50;
+  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_PWM_Init(&htim2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM2_Init 2 */
+
+  /* USER CODE END TIM2_Init 2 */
+  HAL_TIM_MspPostInit(&htim2);
+
+}
+
+/**
+  * @brief TIM3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM3_Init(void)
+{
+
+  /* USER CODE BEGIN TIM3_Init 0 */
+
+  /* USER CODE END TIM3_Init 0 */
+
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  /* USER CODE BEGIN TIM3_Init 1 */
+
+  /* USER CODE END TIM3_Init 1 */
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 0;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 50;
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM3_Init 2 */
+
+  /* USER CODE END TIM3_Init 2 */
+  HAL_TIM_MspPostInit(&htim3);
+
+}
+
+/**
   * @brief USART3 Initialization Function
   * @param None
   * @retval None
@@ -442,7 +582,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(USB_PowerSwitchOn_GPIO_Port, USB_PowerSwitchOn_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_6|GPIO_PIN_7, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_7, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : USER_Btn_Pin */
   GPIO_InitStruct.Pin = USER_Btn_Pin;
@@ -508,8 +648,8 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(USB_VBUS_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PD6 PD7 */
-  GPIO_InitStruct.Pin = GPIO_PIN_6|GPIO_PIN_7;
+  /*Configure GPIO pin : PD7 */
+  GPIO_InitStruct.Pin = GPIO_PIN_7;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
