@@ -32,15 +32,12 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-typedef struct{
-	float Kp;
-	float Ki;
-	float Kd;
-	float dt;
-}pid_parameters_t;
+float Kp;
+float Ki;
+float Kd;
+float dt;
 
 typedef struct{
-	pid_parameters_t p;
 	float previous_error, previous_integral;
 }pid_t;
 /* USER CODE END PTD */
@@ -73,23 +70,25 @@ float temperature;
 int32_t pressure;
 float wyjscie_PID;
 float u1;
+float impulsy = 0;
+float error;
 float calculate_discrete_pid(pid_t* pid, float temp_zadana, float temperature){
 	float u=0, P, I, D, uchyb, integral, derivative;
 
 	uchyb = temp_zadana - temperature;
-
+	error = uchyb;
 	//proportional part
-	P = pid->p.Kp * uchyb;
+	P = Kp * uchyb;
 
 	//integral part
 	integral = pid->previous_integral + (uchyb+pid->previous_error) ; //numerical integrator without anti-windup
 	pid->previous_integral = integral;
-	I = pid->p.Ki*integral*(pid->p.dt/2.0);
+	I = Ki*integral*(dt/2.0);
 
 	//derivative part
-	derivative = (uchyb - pid->previous_error)/pid->p.dt; //numerical derivative without filter
+	derivative = (uchyb - pid->previous_error)/dt; //numerical derivative without filter
 	pid->previous_error = uchyb;
-	D = pid->p.Kd*derivative;
+	D = Kd*derivative;
 
 	//sum of all parts
 	u = P  + I + D; //without saturation
@@ -134,9 +133,12 @@ int main(void)
   /* USER CODE BEGIN 1 */
   #define MAX_LENGTH 30
   char text[MAX_LENGTH];
-  float dt=0.01;
 
-  pid_t pid1 = { .p.Kp=50.0, .p.Ki=0.1, .p.Kd=0, .p.dt=dt, .previous_error=0, .previous_integral=0};
+  pid_t pid1 = {.previous_error=0, .previous_integral=0};
+  Kp = 56.0;
+  Ki = 1.4;
+  Kd = 0;
+  dt = 1;
   //uint16_t length;
   /* USER CODE END 1 */
 
@@ -175,7 +177,6 @@ int main(void)
   HAL_TIM_Encoder_Start(&htim1, TIM_CHANNEL_ALL);
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
-  uint8_t impulsy = 0;
   uint8_t msg[12];
 
   /* USER CODE END 2 */
@@ -201,7 +202,7 @@ int main(void)
 
 //	   tutaj odczyt z enkodera - temp_zadana
 	  impulsy = __HAL_TIM_GET_COUNTER(&htim1);
-	  temp_zadana = 20+(float)impulsy/30*20 ;
+	  temp_zadana = 20+(impulsy/30)*20 ;
 	  sprintf((char*)msg, "\n\rEnkoder= %3i\n\r", impulsy);
 	  HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), 1000);
 	  HAL_Delay(250);
@@ -210,8 +211,7 @@ int main(void)
 
 	  lcd_send_string(text);
 	  wyjscie_PID = calculate_discrete_pid(&pid1, temp_zadana, temperature);
-
-	  if (temperature<temp_zadana)
+	  if (wyjscie_PID>0)
 	  {
 		  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (int)wyjscie_PID);
 		  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);
@@ -219,7 +219,7 @@ int main(void)
 	  else
 	  {
 		  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 0);
-		  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, (int)wyjscie_PID);
+		  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, (-1)*(int)wyjscie_PID);
 	  }
 	  HAL_Delay(1000);
  }
